@@ -73,11 +73,40 @@ class PairsTrader:
 
     def calculate_spread(self, df):
         """Calculate the spread between two stocks using linear regression"""
-        X = sm.add_constant(df[self.stock1])
-        model = sm.OLS(df[self.stock2], X).fit()
+        # Calculate correlations to determine which stock to use as independent variable
+        correlation = df[self.stock1].corr(df[self.stock2])
+
+        # Standardize both price series
+        stock1_std = (df[self.stock1] - df[self.stock1].mean()) / df[self.stock1].std()
+        stock2_std = (df[self.stock2] - df[self.stock2].mean()) / df[self.stock2].std()
+
+        # Create standardized DataFrame
+        df_std = pd.DataFrame({self.stock1: stock1_std, self.stock2: stock2_std})
+
+        # Choose the more volatile stock as dependent variable
+        stock1_vol = df[self.stock1].pct_change().std()
+        stock2_vol = df[self.stock2].pct_change().std()
+
+        if stock1_vol > stock2_vol:
+            X = sm.add_constant(df_std[self.stock2])
+            y = df_std[self.stock1]
+            is_reversed = True
+        else:
+            X = sm.add_constant(df_std[self.stock1])
+            y = df_std[self.stock2]
+            is_reversed = False
+
+        # Fit the model on standardized data
+        model = sm.OLS(y, X).fit()
         hedge_ratio = model.params[1]
-        spread = df[self.stock2] - hedge_ratio * df[self.stock1]
-        return spread, hedge_ratio
+
+        # Calculate spread on standardized data
+        if is_reversed:
+            spread = df_std[self.stock1] - hedge_ratio * df_std[self.stock2]
+        else:
+            spread = df_std[self.stock2] - hedge_ratio * df_std[self.stock1]
+
+        return spread, hedge_ratio, is_reversed
 
     def calculate_z_score(self, spread):
         """Calculate z-score of the spread"""
@@ -100,15 +129,18 @@ class PairsTrader:
 
         return signals
 
-    def calculate_returns(self, df, signals, hedge_ratio):
+    def calculate_returns(self, df, signals, hedge_ratio, is_reversed):
         """Calculate strategy returns"""
         # Calculate daily returns for both stocks
         returns = pd.DataFrame(index=signals.index)
         returns[self.stock1] = df[self.stock1].pct_change()
         returns[self.stock2] = df[self.stock2].pct_change()
 
-        # Calculate spread returns
-        spread_returns = returns[self.stock2] - hedge_ratio * returns[self.stock1]
+        # Calculate spread returns based on the regression direction
+        if is_reversed:
+            spread_returns = returns[self.stock1] - hedge_ratio * returns[self.stock2]
+        else:
+            spread_returns = returns[self.stock2] - hedge_ratio * returns[self.stock1]
 
         # Calculate strategy returns
         signals["strategy_returns"] = signals["position"].shift(1) * spread_returns
@@ -121,27 +153,70 @@ class PairsTrader:
         stats = {}
         returns = signals["strategy_returns"].dropna()
 
-        stats["Total Returns"] = (
-            f"{(signals['cumulative_returns'].iloc[-1] - 1) * 100:.2f}%"
-        )
-        stats["Annual Returns"] = f"{returns.mean() * 252 * 100:.2f}%"
-        stats["Annual Volatility"] = f"{returns.std() * np.sqrt(252) * 100:.2f}%"
-        stats["Sharpe Ratio"] = (
-            f"{(returns.mean() * 252) / (returns.std() * np.sqrt(252)):.2f}"
-        )
-        stats["Max Drawdown"] = (
-            f"{((1 + returns).cumprod().div((1 + returns).cumprod().cummax()) - 1).min() * 100:.2f}%"
-        )
+        # Handle empty or insufficient data
+        if len(returns) < 2:
+            return {
+                "Total Returns": "N/A",
+                "Annual Returns": "N/A",
+                "Annual Volatility": "N/A",
+                "Sharpe Ratio": "N/A",
+                "Max Drawdown": "N/A",
+            }
+
+        # Calculate trading days in the sample
+        trading_days = len(returns)
+        annualization_factor = 252 / trading_days
+
+        # Calculate total return
+        total_return = (signals["cumulative_returns"].iloc[-1] - 1) * 100
+        stats["Total Returns"] = f"{total_return:.2f}%"
+
+        # Calculate annualized return
+        period_return = returns.mean() * trading_days
+        annual_return = period_return * annualization_factor
+        stats["Annual Returns"] = f"{annual_return * 100:.2f}%"
+
+        # Calculate annualized volatility
+        annual_vol = returns.std() * np.sqrt(252)
+        stats["Annual Volatility"] = f"{annual_vol * 100:.2f}%"
+
+        # Calculate Sharpe Ratio
+        # Using 0 as risk-free rate for simplicity
+        if annual_vol != 0:  # Prevent division by zero
+            sharpe = annual_return / annual_vol
+            stats["Sharpe Ratio"] = f"{sharpe:.2f}"
+        else:
+            stats["Sharpe Ratio"] = "N/A"
+
+        # Calculate Maximum Drawdown
+        cum_returns = (1 + returns).cumprod()
+        rolling_max = cum_returns.cummax()
+        drawdowns = cum_returns / rolling_max - 1
+        max_drawdown = drawdowns.min() * 100
+        stats["Max Drawdown"] = f"{max_drawdown:.2f}%"
+
+        # Add number of trades
+        position_changes = signals["position"].diff().fillna(0)
+        num_trades = (position_changes != 0).sum()
+        stats["Number of Trades"] = f"{num_trades}"
+
+        # Add win rate if there are trades
+        if num_trades > 0:
+            profitable_trades = (returns > 0).sum()
+            win_rate = (profitable_trades / num_trades) * 100
+            stats["Win Rate"] = f"{win_rate:.2f}%"
+        else:
+            stats["Win Rate"] = "N/A"
 
         return stats
 
     def run_backtest(self):
         """Run the complete backtest"""
         df = self.fetch_data()
-        spread, hedge_ratio = self.calculate_spread(df)
+        spread, hedge_ratio, is_reversed = self.calculate_spread(df)
         z_score = self.calculate_z_score(spread)
         signals = self.generate_signals(z_score)
-        signals = self.calculate_returns(df, signals, hedge_ratio)
+        signals = self.calculate_returns(df, signals, hedge_ratio, is_reversed)
         stats = self.calculate_statistics(signals)
 
         return df, spread, z_score, signals, stats
