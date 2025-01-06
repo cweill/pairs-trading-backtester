@@ -65,7 +65,11 @@ def main():
     # Dynamic threshold input based on method
     if method == "Z-Score":
         threshold_params = st.sidebar.slider(
-            "Z-Score Threshold", min_value=1.0, max_value=3.0, value=2.0, step=0.1
+            "Z-Score Threshold",
+            min_value=1.0,
+            max_value=3.0,
+            value=1.5,  # Changed default from 2.0 to 1.5
+            step=0.1,
         )
     else:
         threshold_params = st.sidebar.slider(

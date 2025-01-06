@@ -8,7 +8,7 @@ import pytest
 from pairs_trader import PairsTrader
 
 
-@pytest.fixture(params=[("KO", "PEP"), ("JPM", "GS"), ("CVX", "XOM")])
+@pytest.fixture(params=[("KO", "PEP"), ("JPM", "GS"), ("CVX", "XOM"), ("AAPL", "MSFT")])
 def market_data(request):
     """
     Fixture that loads real market data for testing.

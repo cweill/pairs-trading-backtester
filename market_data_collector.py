@@ -15,6 +15,7 @@ def fetch_and_save_test_data():
         ("KO", "PEP"),  # Coca-Cola and Pepsi
         ("JPM", "GS"),  # JP Morgan and Goldman Sachs
         ("CVX", "XOM"),  # Chevron and Exxon Mobil
+        ("AAPL", "MSFT"),  # Apple and Microsoft
     ]
 
     # Create test_data directory if it doesn't exist
@@ -46,7 +47,9 @@ def fetch_and_save_test_data():
                 price2 = df2["Close"]
 
             # Create DataFrame with proper index
-            pair_data = pd.DataFrame({stock1: price1, stock2: price2}, index=df1.index)
+            pair_data = pd.DataFrame(
+                {stock1: price1.round(2), stock2: price2.round(2)}, index=df1.index
+            )
 
             # Clean data
             pair_data = pair_data.dropna()
