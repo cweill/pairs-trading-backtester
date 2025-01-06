@@ -16,6 +16,12 @@ TEST_DATA = [
         "spread_mean": 122.63486011555092,
         "spread_std": 5.4291812891269595,
         "correlation": 0.477083,
+        "returns": {
+            "mean": -0.000234,
+            "std": 0.00159382,
+            "first_valid_return": 0.0,
+            "cumulative_end": 0.9609620754,
+        },
     },
     {
         "pair": ("JPM", "GS"),
@@ -24,6 +30,12 @@ TEST_DATA = [
         "spread_mean": -154.1184725368894,
         "spread_std": 15.189135208761494,
         "correlation": 0.97600,
+        "returns": {
+            "mean": -0.00050325332,
+            "std": 0.00424301,
+            "first_valid_return": 0,
+            "cumulative_end": 0.879276,
+        },
     },
     {
         "pair": ("CVX", "XOM"),
@@ -32,6 +44,12 @@ TEST_DATA = [
         "spread_mean": 95.28237075800826,
         "spread_std": 5.406686835210159,
         "correlation": 0.54244,
+        "returns": {
+            "mean": -0.00046285,
+            "std": 0.00300328,
+            "first_valid_return": 0.0,
+            "cumulative_end": 0.8896928308,
+        },
     },
     {
         "pair": ("AAPL", "MSFT"),
@@ -40,6 +58,12 @@ TEST_DATA = [
         "spread_mean": -134.58820833103275,
         "spread_std": 21.8588494583802,
         "correlation": 0.5329,
+        "returns": {
+            "mean": -0.00042302,
+            "std": 0.0028099322751453863,
+            "first_valid_return": 0,
+            "cumulative_end": 0.89872611,
+        },
     },
 ]
 
@@ -154,7 +178,7 @@ def test_generate_signals(trader, market_data):
 
 def test_calculate_returns(trader, market_data):
     """Test returns calculation using real market data"""
-    df, _, _, _ = market_data
+    df, _, _, test_config = market_data
     spread, hedge_ratio, is_reversed = trader.calculate_spread(df)
     z_score = trader.calculate_z_score(spread)
     signals = trader.generate_signals_zscore(z_score)
@@ -162,35 +186,40 @@ def test_calculate_returns(trader, market_data):
 
     # Find first valid index for returns (after initial NaN values)
     first_valid_idx = signals["strategy_returns"].first_valid_index()
+    returns = signals["strategy_returns"].dropna()
 
-    # Verify return calculations with actual data
-    assert "strategy_returns" in signals.columns, "Missing strategy returns"
-    assert "cumulative_returns" in signals.columns, "Missing cumulative returns"
+    # Test return properties with exact values
+    assert returns.mean() == pytest.approx(
+        test_config["returns"]["mean"], abs=1e-4
+    ), "Mean return should match expected value"
 
-    # Test return properties
-    assert (
-        not signals["strategy_returns"].isnull().all()
-    ), "Strategy returns should not be all NaN"
-    assert signals["strategy_returns"].std() > 0, "Strategy should show some volatility"
-    assert (
-        abs(signals["strategy_returns"].mean()) < 0.1
-    ), "Average daily return should be reasonable"
+    assert returns.std() == pytest.approx(
+        test_config["returns"]["std"], abs=1e-4
+    ), "Return volatility should match expected value"
 
-    # Test cumulative return properties starting from first valid index
+    # Test first valid return
     if first_valid_idx is not None:
-        assert (
-            abs(signals.loc[first_valid_idx, "cumulative_returns"] - 1.0) < 1e-10
-        ), "Cumulative returns should start at 1.0"
-        assert (
-            signals.loc[first_valid_idx:, "cumulative_returns"] >= 0
-        ).all(), "Cumulative returns cannot be negative"
+        assert signals.loc[first_valid_idx, "strategy_returns"] == pytest.approx(
+            test_config["returns"]["first_valid_return"], abs=1e-4
+        ), "First valid return should match expected value"
 
-    # Verify returns with zero positions are very close to zero or NaN
+    # Test final cumulative return
+    assert signals["cumulative_returns"].iloc[-1] == pytest.approx(
+        test_config["returns"]["cumulative_end"], abs=1e-4
+    ), "Final cumulative return should match expected value"
+
+    # Verify returns with zero positions are zero
     zero_pos_mask = signals["position"] == 0
     zero_pos_returns = signals.loc[zero_pos_mask, "strategy_returns"].fillna(0)
     assert (
         zero_pos_returns.abs() < 1e-6
     ).all(), "Returns with zero position should be very close to zero"
+
+    # Verify position changes align with returns
+    non_zero_returns = signals[signals["strategy_returns"].abs() > 1e-6]
+    assert (
+        non_zero_returns["position"].shift(1) != 0
+    ).all(), "Non-zero returns should only occur after non-zero positions"
 
 
 def test_error_handling(trader):
