@@ -51,9 +51,6 @@ def main():
     with st.sidebar:
         st.header("Trading Parameters")
 
-        # Create an empty placeholder for the run button
-        button_placeholder = st.empty()
-
         # Stock inputs
         stock1 = st.text_input("Stock 1 Symbol", value="AAPL")
         stock2 = st.text_input("Stock 2 Symbol", value="MSFT")
@@ -136,6 +133,8 @@ def main():
         }
         lookback = st.selectbox("Lookback Period", list(lookback_options.keys()))
 
+        # Create an empty placeholder for the run button
+        button_placeholder = st.empty()
         # Add the manual run button at the end of the sidebar
         run_button = button_placeholder.button("Run Backtest")
 

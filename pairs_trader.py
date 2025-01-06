@@ -269,52 +269,40 @@ class PairsTrader:
         if len(df) < 2:
             raise ValueError("Insufficient data points")
 
-        # Calculate standard deviations first
-        stock1_data = df[
-            self.stock1
-        ].to_numpy()  # Convert to numpy for faster operations
+        # Convert to numpy arrays for faster operations
+        stock1_data = df[self.stock1].to_numpy()
         stock2_data = df[self.stock2].to_numpy()
 
-        # Use numpy's std which has better handling for edge cases
-        stock1_std = np.std(stock1_data, ddof=1)  # ddof=1 for sample standard deviation
+        # Calculate standard deviations for volatility comparison
+        stock1_std = np.std(stock1_data, ddof=1)
         stock2_std = np.std(stock2_data, ddof=1)
 
         # Early exit for invalid data
         if stock1_std == 0 or stock2_std == 0:
             raise ValueError("One or both stocks show no price variation")
 
-        # Only calculate correlation if we have valid standard deviations
-        correlation = np.corrcoef(stock1_data, stock2_data)[0, 1]
-
-        # Standardize both price series
-        stock1_std = (df[self.stock1] - df[self.stock1].mean()) / stock1_std
-        stock2_std = (df[self.stock2] - df[self.stock2].mean()) / stock2_std
-
-        # Create standardized DataFrame
-        df_std = pd.DataFrame({self.stock1: stock1_std, self.stock2: stock2_std})
-
         # Choose the more volatile stock as dependent variable
-        stock1_vol = df[self.stock1].pct_change(fill_method=None).std()
-        stock2_vol = df[self.stock2].pct_change(fill_method=None).std()
+        stock1_vol = np.std(np.diff(stock1_data) / stock1_data[:-1])
+        stock2_vol = np.std(np.diff(stock2_data) / stock2_data[:-1])
 
         if stock1_vol > stock2_vol:
-            X = sm.add_constant(df_std[self.stock2])
-            y = df_std[self.stock1]
+            X = sm.add_constant(df[self.stock2])
+            y = df[self.stock1]
             is_reversed = True
         else:
-            X = sm.add_constant(df_std[self.stock1])
-            y = df_std[self.stock2]
+            X = sm.add_constant(df[self.stock1])
+            y = df[self.stock2]
             is_reversed = False
 
-        # Fit the model on standardized data
+        # Fit the model on raw price data
         model = sm.OLS(y, X).fit()
         hedge_ratio = model.params.iloc[1]
 
-        # Calculate spread on standardized data
+        # Calculate spread using raw prices
         if is_reversed:
-            spread = df_std[self.stock1] - hedge_ratio * df_std[self.stock2]
+            spread = df[self.stock1] - hedge_ratio * df[self.stock2]
         else:
-            spread = df_std[self.stock2] - hedge_ratio * df_std[self.stock1]
+            spread = df[self.stock2] - hedge_ratio * df[self.stock1]
 
         # Handle potential NaN values in spread
         spread = spread.replace([np.inf, -np.inf], np.nan)

@@ -7,24 +7,64 @@ import pytest
 
 from pairs_trader import PairsTrader
 
+# Define test data configurations
+TEST_DATA = [
+    {
+        "pair": ("KO", "PEP"),
+        "file": "testdata/KO_PEP_prices.csv",
+        "hedge_ratio": 0.682918,
+        "spread_mean": 122.63486011555092,
+        "spread_std": 5.4291812891269595,
+        "correlation": 0.477083,
+    },
+    {
+        "pair": ("JPM", "GS"),
+        "file": "testdata/JPM_GS_prices.csv",
+        "hedge_ratio": 3.047697,
+        "spread_mean": -154.1184725368894,
+        "spread_std": 15.189135208761494,
+        "correlation": 0.97600,
+    },
+    {
+        "pair": ("CVX", "XOM"),
+        "file": "testdata/CVX_XOM_prices.csv",
+        "hedge_ratio": 0.4970833,
+        "spread_mean": 95.28237075800826,
+        "spread_std": 5.406686835210159,
+        "correlation": 0.54244,
+    },
+    {
+        "pair": ("AAPL", "MSFT"),
+        "file": "testdata/AAPL_MSFT_prices.csv",
+        "hedge_ratio": 0.8137367586847457,
+        "spread_mean": -134.58820833103275,
+        "spread_std": 21.8588494583802,
+        "correlation": 0.5329,
+    },
+]
 
-@pytest.fixture(params=[("KO", "PEP"), ("JPM", "GS"), ("CVX", "XOM"), ("AAPL", "MSFT")])
+
+@pytest.fixture(
+    params=TEST_DATA,
+    ids=lambda x: f"{x['pair'][0]}_{x['pair'][1]}",  # Creates IDs like "KO_PEP", "JPM_GS", etc.
+)
 def market_data(request):
     """
     Fixture that loads real market data for testing.
     """
-    stock1, stock2 = request.param
-    filename = f"testdata/{stock1}_{stock2}_prices.csv"
+    test_config = request.param
+    stock1, stock2 = test_config["pair"]
+    filename = test_config["file"]
 
     # Read the CSV file directly
     df = pd.read_csv(filename, parse_dates=["Date"], index_col="Date")
-    return df, stock1, stock2
+    return df, stock1, stock2, test_config
 
 
 @pytest.fixture
 def trader(market_data):
     """Create a PairsTrader instance using market data"""
-    df, stock1, stock2 = market_data
+    df, stock1, stock2, _ = market_data
     start_date = df.index[0].strftime("%Y-%m-%d")
     end_date = df.index[-1].strftime("%Y-%m-%d")
 
@@ -40,26 +80,38 @@ def trader(market_data):
 
 def test_calculate_spread(trader, market_data):
     """Test spread calculation using real market data"""
-    df, _, _ = market_data
+    df, _, _, test_config = market_data
     spread, hedge_ratio, is_reversed = trader.calculate_spread(df)
 
-    # Basic sanity checks
+    # Test for NaN values
     assert not spread.isnull().any(), "Spread contains NaN values"
-    assert abs(spread.mean()) < 0.1, "Spread mean should be close to zero"
-    assert spread.std() > 0, "Spread should have positive standard deviation"
 
-    # Verify hedge ratio is reasonable
+    # Test spread properties with exact values using pytest.approx()
+    # Note: For non-standardized data, we expect the mean to still be close to zero
+    # but the standard deviation will be different for each pair
+    assert spread.mean() == pytest.approx(
+        test_config["spread_mean"], abs=1.0
+    ), "Spread mean should be approximately zero"
+    assert spread.std() == pytest.approx(
+        test_config["spread_std"], abs=1.0
+    ), "Spread should match expected standard deviation"
+
+    # Test hedge ratio with exact values (now using raw price ratios)
     assert isinstance(hedge_ratio, float), "Hedge ratio should be a float"
-    assert 0.1 < abs(hedge_ratio) < 10.0, "Hedge ratio should be reasonable"
+    assert hedge_ratio == pytest.approx(
+        test_config["hedge_ratio"], abs=1e-2
+    ), f"Hedge ratio for {trader.stock1}-{trader.stock2} should be approximately {test_config['hedge_ratio']}"
 
-    # Add correlation check with lower threshold
+    # Test correlation with exact value (correlation remains the same with or without standardization)
     corr = df[trader.stock1].corr(df[trader.stock2])
-    assert abs(corr) > 0.4, "Stock pair should show moderate correlation"
+    assert corr == pytest.approx(
+        test_config["correlation"], abs=1e-2
+    ), f"Stock pair correlation should be approximately {test_config['correlation']}"
 
 
 def test_calculate_z_score(trader, market_data):
     """Test z-score calculation using real market data"""
-    df, _, _ = market_data
+    df, _, _, _ = market_data
     spread, _, _ = trader.calculate_spread(df)
     z_score = trader.calculate_z_score(spread)
 
@@ -78,7 +130,7 @@ def test_calculate_z_score(trader, market_data):
 
 def test_generate_signals(trader, market_data):
     """Test signal generation using real market data"""
-    df, _, _ = market_data
+    df, _, _, _ = market_data
     spread, _, _ = trader.calculate_spread(df)
     z_score = trader.calculate_z_score(spread)
     signals = trader.generate_signals_zscore(z_score)
@@ -102,7 +154,7 @@ def test_generate_signals(trader, market_data):
 
 def test_calculate_returns(trader, market_data):
     """Test returns calculation using real market data"""
-    df, _, _ = market_data
+    df, _, _, _ = market_data
     spread, hedge_ratio, is_reversed = trader.calculate_spread(df)
     z_score = trader.calculate_z_score(spread)
     signals = trader.generate_signals_zscore(z_score)
