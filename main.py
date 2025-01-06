@@ -10,13 +10,112 @@ from plotly.subplots import make_subplots
 
 
 class PairsTrader:
-    def __init__(self, stock1, stock2, start_date, end_date, z_score_threshold):
+    def __init__(
+        self, stock1, stock2, start_date, end_date, threshold_params, method="zscore"
+    ):
         self.stock1 = stock1
         self.stock2 = stock2
         self.start_date = start_date
         self.end_date = end_date
-        self.z_score_threshold = z_score_threshold
+        self.threshold_params = (
+            threshold_params  # Either z_score threshold or half-life period
+        )
+        self.method = method
         self.position = 0
+
+    def calculate_half_life(self, spread):
+        """Calculate the half-life of mean reversion"""
+        try:
+            # Remove any NaN values
+            spread = spread.dropna()
+
+            # Create lag version of spread
+            spread_lag = spread.shift(1)
+            spread_diff = spread - spread_lag
+
+            # Clean up pairs
+            spread_lag = spread_lag.dropna()
+            spread_diff = spread_diff.dropna()
+
+            # Add constant to lagged spread
+            spread_lag = sm.add_constant(spread_lag)
+
+            # Regression of difference against levels
+            model = sm.OLS(spread_diff, spread_lag)
+            results = model.fit()
+
+            # Calculate half-life
+            half_life = -np.log(2) / results.params[1]
+
+            # If half_life is negative or too large, default to 21 days
+            if half_life <= 0 or half_life > 252:  # 252 trading days in a year
+                return 21
+
+            return round(abs(half_life))
+
+        except Exception as e:
+            print(f"Error calculating half-life: {str(e)}")  # Debug print
+            return 21  # Default to 21 days if calculation fails
+
+    def generate_signals_half_life(self, spread, half_life):
+        """Generate trading signals based on half-life mean reversion"""
+        signals = pd.DataFrame(index=spread.index)
+
+        # Calculate mean and standard deviation using half-life period
+        mean = spread.ewm(halflife=half_life).mean()
+        std = spread.ewm(halflife=half_life).std()
+
+        # Calculate normalized spread
+        normalized_spread = (spread - mean) / std
+        signals["normalized_spread"] = normalized_spread
+        signals["position"] = 0
+
+        # Generate signals based on standard deviations
+        signals.loc[normalized_spread < -2, "position"] = (
+            1  # Long position when spread is 2 std below mean
+        )
+        signals.loc[normalized_spread > 2, "position"] = (
+            -1
+        )  # Short position when spread is 2 std above mean
+
+        return signals
+
+    def generate_signals_zscore(self, z_score):
+        """Generate trading signals based on z-score"""
+        """Generate trading signals based on z-score"""
+        signals = pd.DataFrame(index=z_score.index)
+        signals["z_score"] = z_score
+        signals["position"] = 0
+
+        # Long spread when z-score is below negative threshold
+        signals.loc[z_score < -self.threshold_params, "position"] = 1
+
+        # Short spread when z-score is above positive threshold
+        signals.loc[z_score > self.threshold_params, "position"] = -1
+
+        return signals
+
+    def run_backtest(self):
+        """Run the complete backtest"""
+        try:
+            df = self.fetch_data()
+            spread, hedge_ratio, is_reversed = self.calculate_spread(df)
+
+            if self.method == "half-life":  # Changed from 'halflife' to 'half-life'
+                half_life = self.calculate_half_life(spread)
+                signals = self.generate_signals_half_life(spread, self.threshold_params)
+                z_score = signals["normalized_spread"]  # For plotting purposes
+            else:
+                z_score = self.calculate_z_score(spread)
+                signals = self.generate_signals_zscore(z_score)
+
+            signals = self.calculate_returns(df, signals, hedge_ratio, is_reversed)
+            stats = self.calculate_statistics(signals)
+
+            return df, spread, z_score, signals, stats
+        except Exception as e:
+            print(f"Error in run_backtest: {str(e)}")  # Debug print
+            raise
 
     def fetch_data(self):
         """Fetch stock data from Yahoo Finance"""
@@ -210,17 +309,6 @@ class PairsTrader:
 
         return stats
 
-    def run_backtest(self):
-        """Run the complete backtest"""
-        df = self.fetch_data()
-        spread, hedge_ratio, is_reversed = self.calculate_spread(df)
-        z_score = self.calculate_z_score(spread)
-        signals = self.generate_signals(z_score)
-        signals = self.calculate_returns(df, signals, hedge_ratio, is_reversed)
-        stats = self.calculate_statistics(signals)
-
-        return df, spread, z_score, signals, stats
-
 
 def plot_backtest_results(df, z_score, signals):
     """Create plots for the backtest results"""
@@ -267,6 +355,30 @@ def main():
     stock1 = st.sidebar.text_input("Stock 1 Symbol", value="AAPL")
     stock2 = st.sidebar.text_input("Stock 2 Symbol", value="MSFT")
 
+    # Add method selection
+    method = st.sidebar.selectbox(
+        "Trading Method",
+        ["Z-Score", "Half-life"],
+        format_func=lambda x: (
+            "Z-Score Threshold" if x == "Z-Score" else "Half-life Mean Reversion"
+        ),
+    )
+
+    # Dynamic threshold input based on method
+    if method == "Z-Score":
+        threshold_params = st.sidebar.slider(
+            "Z-Score Threshold", min_value=1.0, max_value=3.0, value=2.0, step=0.1
+        )
+    else:
+        threshold_params = st.sidebar.slider(
+            "Half-life Period (days)",
+            min_value=1,
+            max_value=100,
+            value=21,
+            step=1,
+            help="Number of days for half-life calculation",
+        )
+
     def get_ytd_days():
         now = datetime.now()
         start_of_year = datetime(now.year, 1, 1)
@@ -286,17 +398,15 @@ def main():
     end_date = datetime.now()
     start_date = end_date - timedelta(days=lookback_options[lookback])
 
-    z_score_threshold = st.sidebar.slider(
-        "Z-Score Threshold", min_value=1.0, max_value=3.0, value=2.0, step=0.1
-    )
-
     # Run backtest button
     if st.sidebar.button("Run Backtest"):
         with st.spinner("Running backtest..."):
             try:
-                # Initialize and run backtest
+                # Initialize and run backtest with selected method
+                # Convert method name to lowercase and replace space with hyphen
+                method_param = method.lower().replace(" ", "-")
                 trader = PairsTrader(
-                    stock1, stock2, start_date, end_date, z_score_threshold
+                    stock1, stock2, start_date, end_date, threshold_params, method_param
                 )
                 df, spread, z_score, signals, stats = trader.run_backtest()
 
@@ -318,6 +428,10 @@ def main():
                 st.write(
                     f"Correlation between {stock1} and {stock2}: {correlation:.2f}"
                 )
+
+                if method == "Half-life":
+                    half_life = trader.calculate_half_life(spread)
+                    st.write(f"Calculated Half-life: {half_life:.2f} days")
 
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
