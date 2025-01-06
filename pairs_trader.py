@@ -83,7 +83,6 @@ class PairsTrader:
 
     def generate_signals_zscore(self, z_score):
         """Generate trading signals based on z-score"""
-        """Generate trading signals based on z-score"""
         signals = pd.DataFrame(index=z_score.index)
         signals["z_score"] = z_score
         signals["position"] = 0
@@ -96,17 +95,106 @@ class PairsTrader:
 
         return signals
 
+    def generate_signals_bollinger(self, spread):
+        """Generate trading signals using Bollinger Bands"""
+        window = self.threshold_params["window"]
+        num_std = self.threshold_params["num_std"]
+
+        signals = pd.DataFrame(index=spread.index)
+        rolling_mean = spread.rolling(window=window).mean()
+        rolling_std = spread.rolling(window=window).std()
+
+        upper_band = rolling_mean + (rolling_std * num_std)
+        lower_band = rolling_mean - (rolling_std * num_std)
+
+        signals["position"] = 0
+        signals.loc[spread < lower_band, "position"] = 1  # Long when below lower band
+        signals.loc[spread > upper_band, "position"] = -1  # Short when above upper band
+
+        return signals
+
+    def generate_signals_rsi(self, spread):
+        """Generate trading signals using RSI divergence"""
+        period = self.threshold_params["rsi_period"]
+        threshold = self.threshold_params["rsi_threshold"]
+
+        signals = pd.DataFrame(index=spread.index)
+
+        # Calculate RSI
+        delta = spread.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+
+        signals["position"] = 0
+        signals.loc[rsi < threshold, "position"] = 1  # Long when oversold
+        signals.loc[rsi > (100 - threshold), "position"] = -1  # Short when overbought
+
+        return signals
+
+    def generate_signals_kalman(self, spread):
+        """Generate trading signals using Kalman Filter"""
+        delta = self.threshold_params["delta"]
+        R = self.threshold_params["R"]
+
+        signals = pd.DataFrame(index=spread.index)
+        n = len(spread)
+
+        # Initialize Kalman Filter parameters
+        x = spread.iloc[0]  # State estimate
+        P = 1.0  # Error estimate
+        Q = delta  # Process variance
+
+        filtered_spread = np.zeros(n)
+        filtered_spread[0] = x
+
+        # Run Kalman Filter
+        for t in range(1, n):
+            # Predict
+            x = x
+            P = P + Q
+
+            # Update
+            K = P / (P + R)
+            x = x + K * (spread.iloc[t] - x)
+            P = (1 - K) * P
+
+            filtered_spread[t] = x
+
+        filtered_spread = pd.Series(filtered_spread, index=spread.index)
+        signals["filtered_spread"] = filtered_spread
+
+        # Generate signals based on filtered spread
+        signals["position"] = 0
+        signals.loc[filtered_spread < -self.threshold_params["delta"], "position"] = 1
+        signals.loc[filtered_spread > self.threshold_params["delta"], "position"] = -1
+
+        return signals
+
     def run_backtest(self):
         """Run the complete backtest"""
         try:
             df = self.fetch_data()
             spread, hedge_ratio, is_reversed = self.calculate_spread(df)
 
-            if self.method == "half-life":  # Changed from 'halflife' to 'half-life'
-                half_life = self.calculate_half_life(spread)
+            if self.method == "half-life":
                 signals = self.generate_signals_half_life(spread, self.threshold_params)
-                z_score = signals["normalized_spread"]  # For plotting purposes
-            else:
+                z_score = signals["normalized_spread"]
+            elif self.method == "bollinger":
+                signals = self.generate_signals_bollinger(spread)
+                z_score = (
+                    spread
+                    - spread.rolling(window=self.threshold_params["window"]).mean()
+                ) / spread.rolling(window=self.threshold_params["window"]).std()
+            elif self.method == "rsi":
+                signals = self.generate_signals_rsi(spread)
+                z_score = spread  # Use spread for visualization
+            elif self.method == "kalman":
+                signals = self.generate_signals_kalman(spread)
+                z_score = signals["filtered_spread"]
+            else:  # Default z-score method
                 z_score = self.calculate_z_score(spread)
                 signals = self.generate_signals_zscore(z_score)
 
@@ -115,7 +203,7 @@ class PairsTrader:
 
             return df, spread, z_score, signals, stats
         except Exception as e:
-            print(f"Error in run_backtest: {str(e)}")  # Debug print
+            print(f"Error in run_backtest: {str(e)}")
             raise
 
     def fetch_data(self):

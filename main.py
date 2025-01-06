@@ -47,74 +47,117 @@ def plot_backtest_results(df, z_score, signals):
 def main():
     st.title("Pairs Trading Backtester")
 
-    # Sidebar inputs
-    st.sidebar.header("Trading Parameters")
+    # Create a form in the sidebar
+    with st.sidebar:
+        st.header("Trading Parameters")
 
-    stock1 = st.sidebar.text_input("Stock 1 Symbol", value="AAPL")
-    stock2 = st.sidebar.text_input("Stock 2 Symbol", value="MSFT")
+        # Create an empty placeholder for the run button
+        button_placeholder = st.empty()
 
-    # Add method selection
-    method = st.sidebar.selectbox(
-        "Trading Method",
-        ["Z-Score", "Half-life"],
-        format_func=lambda x: (
-            "Z-Score Threshold" if x == "Z-Score" else "Half-life Mean Reversion"
-        ),
-    )
+        # Stock inputs
+        stock1 = st.text_input("Stock 1 Symbol", value="AAPL")
+        stock2 = st.text_input("Stock 2 Symbol", value="MSFT")
 
-    # Dynamic threshold input based on method
-    if method == "Z-Score":
-        threshold_params = st.sidebar.slider(
-            "Z-Score Threshold",
+        # Method selection
+        method = st.selectbox(
+            "Trading Method",
+            ["Z-Score", "Half-life", "Kalman", "Bollinger", "RSI"],
+            format_func=lambda x: {
+                "Z-Score": "Z-Score Threshold",
+                "Half-life": "Half-life Mean Reversion",
+                "Kalman": "Kalman Filter",
+                "Bollinger": "Bollinger Bands",
+                "RSI": "RSI Divergence",
+            }[x],
+        )
+
+        # Dynamic threshold input based on method
+        if method == "Z-Score":
+            threshold_params = st.slider(
+                "Z-Score Threshold",
+                min_value=1.0,
+                max_value=3.0,
+                value=1.5,
+                step=0.1,
+            )
+        elif method == "Bollinger":
+            threshold_params = {
+                "window": st.slider("Window Size", 5, 50, 20),
+                "num_std": st.slider(
+                    "Number of Standard Deviations", 1.0, 3.0, 2.0, 0.1
+                ),
+            }
+        elif method == "RSI":
+            threshold_params = {
+                "rsi_period": st.slider("RSI Period", 5, 30, 14),
+                "rsi_threshold": st.slider("RSI Threshold", 20, 40, 30),
+            }
+        elif method == "Kalman":
+            threshold_params = {
+                "delta": st.slider(
+                    "Delta (Kalman measurement noise)", 1e-4, 1e-1, 1e-2, format="%.4f"
+                ),
+                "R": st.slider(
+                    "R (Kalman process noise)", 1e-4, 1e-1, 1e-2, format="%.4f"
+                ),
+            }
+        else:
+            threshold_params = st.slider(
+                "Half-life Period (days)",
+                min_value=1,
+                max_value=100,
+                value=21,
+                step=1,
+                help="Number of days for half-life calculation",
+            )
+
+        leverage = st.slider(
+            "Leverage",
             min_value=1.0,
-            max_value=3.0,
-            value=1.5,  # Changed default from 2.0 to 1.5
-            step=0.1,
-        )
-    else:
-        threshold_params = st.sidebar.slider(
-            "Half-life Period (days)",
-            min_value=1,
-            max_value=100,
-            value=21,
-            step=1,
-            help="Number of days for half-life calculation",
+            max_value=5.0,
+            value=1.0,
+            step=0.5,
+            help="Trading leverage multiplier. Use with caution as it amplifies both gains and losses.",
         )
 
-    leverage = st.sidebar.slider(
-        "Leverage",
-        min_value=1.0,
-        max_value=5.0,
-        value=1.0,
-        step=0.5,
-        help="Trading leverage multiplier. Use with caution as it amplifies both gains and losses.",
-    )
+        def get_ytd_days():
+            now = datetime.now()
+            start_of_year = datetime(now.year, 1, 1)
+            return (now - start_of_year).days
 
-    def get_ytd_days():
-        now = datetime.now()
-        start_of_year = datetime(now.year, 1, 1)
-        return (now - start_of_year).days
+        lookback_options = {
+            "3 Months": 90,
+            "6 Months": 180,
+            "YTD": get_ytd_days(),
+            "1 Year": 365,
+            "2 Years": 730,
+            "5 Years": 1825,
+            "10 Years": 3650,
+        }
+        lookback = st.selectbox("Lookback Period", list(lookback_options.keys()))
 
-    lookback_options = {
-        "3 Months": 90,
-        "6 Months": 180,
-        "YTD": get_ytd_days(),
-        "1 Year": 365,
-        "2 Years": 730,
-        "5 Years": 1825,
-        "10 Years": 3650,
-    }
-    lookback = st.sidebar.selectbox("Lookback Period", list(lookback_options.keys()))
+        # Add the manual run button at the end of the sidebar
+        run_button = button_placeholder.button("Run Backtest")
 
+    # Calculate dates
     end_date = datetime.now()
     start_date = end_date - timedelta(days=lookback_options[lookback])
 
-    # Run backtest button
-    if st.sidebar.button("Run Backtest"):
+    # Create a hash of all input parameters
+    input_params_hash = hash(
+        f"{stock1}{stock2}{method}{str(threshold_params)}{leverage}{lookback}"
+    )
+
+    # Store the hash in session state if it doesn't exist
+    if "last_params_hash" not in st.session_state:
+        st.session_state.last_params_hash = None
+
+    # Run backtest if inputs changed or button pressed
+    if input_params_hash != st.session_state.last_params_hash or run_button:
+        st.session_state.last_params_hash = input_params_hash
         with st.spinner("Running backtest..."):
             try:
                 # Initialize and run backtest with selected method
-                # Convert method name to lowercase and replace space with hyphen
                 method_param = method.lower().replace(" ", "-")
                 trader = PairsTrader(
                     stock1,
