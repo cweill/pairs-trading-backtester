@@ -16,6 +16,7 @@ statsmodels = "^0.14.4"
 black = "^24.10.0"
 isort = "^5.13.2"
 watchdog = "^6.0.0"
+pytest = "^8.3.4"
 
 
 [build-system]
