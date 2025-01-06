@@ -81,6 +81,15 @@ def main():
             help="Number of days for half-life calculation",
         )
 
+    leverage = st.sidebar.slider(
+        "Leverage",
+        min_value=1.0,
+        max_value=5.0,
+        value=1.0,
+        step=0.5,
+        help="Trading leverage multiplier. Use with caution as it amplifies both gains and losses.",
+    )
+
     def get_ytd_days():
         now = datetime.now()
         start_of_year = datetime(now.year, 1, 1)
@@ -108,7 +117,13 @@ def main():
                 # Convert method name to lowercase and replace space with hyphen
                 method_param = method.lower().replace(" ", "-")
                 trader = PairsTrader(
-                    stock1, stock2, start_date, end_date, threshold_params, method_param
+                    stock1,
+                    stock2,
+                    start_date,
+                    end_date,
+                    threshold_params,
+                    method_param,
+                    leverage,
                 )
                 df, spread, z_score, signals, stats = trader.run_backtest()
 

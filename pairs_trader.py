@@ -6,16 +6,22 @@ import yfinance as yf
 
 class PairsTrader:
     def __init__(
-        self, stock1, stock2, start_date, end_date, threshold_params, method="zscore"
+        self,
+        stock1,
+        stock2,
+        start_date,
+        end_date,
+        threshold_params,
+        method="zscore",
+        leverage=1.0,
     ):
         self.stock1 = stock1
         self.stock2 = stock2
         self.start_date = start_date
         self.end_date = end_date
-        self.threshold_params = (
-            threshold_params  # Either z_score threshold or half-life period
-        )
+        self.threshold_params = threshold_params
         self.method = method
+        self.leverage = leverage
         self.position = 0
 
     def calculate_half_life(self, spread):
@@ -264,9 +270,11 @@ class PairsTrader:
             spread_returns = returns[self.stock2] - hedge_ratio * returns[self.stock1]
 
         # Calculate strategy returns with explicit position handling
-        signals["strategy_returns"] = 0.0  # Initialize with zeros
+        signals["strategy_returns"] = 0.0
         signals.loc[signals["position"] != 0, "strategy_returns"] = (
-            signals["position"].shift(1).loc[signals["position"] != 0] * spread_returns
+            signals["position"].shift(1).loc[signals["position"] != 0]
+            * spread_returns
+            * self.leverage
         )
 
         # Calculate cumulative returns
@@ -275,9 +283,13 @@ class PairsTrader:
         return signals
 
     def calculate_statistics(self, signals):
-        """Calculate trading statistics"""
         stats = {}
         returns = signals["strategy_returns"].dropna()
+
+        # Add leverage information to stats
+        if self.leverage > 1:
+            stats["Leverage Used"] = f"{self.leverage}x"
+            stats["Note"] = "Returns shown include leverage effects"
 
         # Handle empty or insufficient data
         if len(returns) < 2:
