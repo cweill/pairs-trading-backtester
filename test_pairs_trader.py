@@ -22,6 +22,36 @@ TEST_DATA = [
             "first_valid_return": 0.0,
             "cumulative_end": 0.9609620754,
         },
+        "z_score": {
+            "mean": -0.137923008367,
+            "std": 1.261495268,
+            "autocorr": 0.85671456,
+            "valid_count": 232,  # len(df) - 20 for rolling window
+        },
+        "kalman": {
+            "delta": 0.001,  # Process variance
+            "R": 0.001,  # Measurement variance
+            "filtered_spread": {
+                "mean": 123.045693553,
+                "std": 3.9125366477085,
+                "first_value": 123.72486,
+                "last_value": 110.84654282,
+                "signal_counts": {
+                    "long": 0,  # Number of long signals
+                    "short": 251,  # Number of short signals
+                    "neutral": 0,  # Number of neutral signals
+                },
+            },
+            "statistics": {
+                "Total Returns": -0.835241,
+                "Annual Returns": -0.0867,
+                "Annual Volatility": 0.4251,
+                "Sharpe Ratio": -0.21340445,
+                "Max Drawdown": -0.9069902937,
+                "Number of Trades": 10,
+                "Win Rate": 0.6363636363636364,
+            },
+        },
     },
     {
         "pair": ("JPM", "GS"),
@@ -35,6 +65,32 @@ TEST_DATA = [
             "std": 0.00424301,
             "first_valid_return": 0,
             "cumulative_end": 0.879276,
+        },
+        "z_score": {
+            "mean": -0.164736883,
+            "std": 1.2502362187,
+            "autocorr": 0.8213976,
+            "valid_count": 232,
+        },
+        "kalman": {
+            "delta": 0.001,
+            "R": 0.001,
+            "filtered_spread": {
+                "mean": -153.40719484947576,
+                "std": 11.89076653,
+                "first_value": -133.6428,
+                "last_value": -154.4130054065,
+                "signal_counts": {"long": 251, "short": 0, "neutral": 0},
+            },
+            "statistics": {
+                "Total Returns": 3.458113,
+                "Annual Returns": 0.2523,
+                "Annual Volatility": 0.38668,
+                "Sharpe Ratio": 0.5822559,
+                "Max Drawdown": -0.705553,
+                "Number of Trades": 26,
+                "Win Rate": 0.7037037037037037,
+            },
         },
     },
     {
@@ -50,6 +106,32 @@ TEST_DATA = [
             "first_valid_return": 0.0,
             "cumulative_end": 0.8896928308,
         },
+        "z_score": {
+            "mean": 0.09104704236,
+            "std": 1.26939483297,
+            "autocorr": 0.8523894121,
+            "valid_count": 231,
+        },
+        "kalman": {
+            "delta": 0.001,
+            "R": 0.001,
+            "filtered_spread": {
+                "mean": 95.226223,
+                "std": 4.4554974,
+                "first_value": 95.881971975,
+                "last_value": 94.0895771,
+                "signal_counts": {"long": 0, "short": 250, "neutral": 0},
+            },
+            "statistics": {
+                "Total Returns": 0.462161,
+                "Annual Returns": 0.059119414,
+                "Annual Volatility": 0.196737,
+                "Sharpe Ratio": 0.291985,
+                "Max Drawdown": -0.5844998603,
+                "Number of Trades": 9,
+                "Win Rate": 1,
+            },
+        },
     },
     {
         "pair": ("AAPL", "MSFT"),
@@ -63,6 +145,32 @@ TEST_DATA = [
             "std": 0.0028099322751453863,
             "first_valid_return": 0,
             "cumulative_end": 0.89872611,
+        },
+        "z_score": {
+            "mean": 0.14646263039689,
+            "std": 1.30125976,
+            "autocorr": 0.868049345848578,
+            "valid_count": 231,
+        },
+        "kalman": {
+            "delta": 0.001,
+            "R": 0.001,
+            "filtered_spread": {
+                "mean": -135.483760629022,
+                "std": 19.628204260,
+                "first_value": -118.5790031238,
+                "last_value": -103.61349680,
+                "signal_counts": {"long": 250, "short": 0, "neutral": 0},
+            },
+            "statistics": {
+                "Total Returns": 3.850771,
+                "Annual Returns": 0.19874,
+                "Annual Volatility": 0.214411,
+                "Sharpe Ratio": 0.845764,
+                "Max Drawdown": -0.2798129,
+                "Number of Trades": 53,
+                "Win Rate": 0.8703703703703703,
+            },
         },
     },
 ]
@@ -135,21 +243,29 @@ def test_calculate_spread(trader, market_data):
 
 def test_calculate_z_score(trader, market_data):
     """Test z-score calculation using real market data"""
-    df, _, _, _ = market_data
+    df, _, _, test_config = market_data
     spread, _, _ = trader.calculate_spread(df)
     z_score = trader.calculate_z_score(spread)
 
-    # Statistical properties checks using actual data characteristics
+    # Test number of valid z-scores
+    valid_z_scores = z_score.dropna()
     assert (
-        len(z_score.dropna()) >= len(df) - 20
-    ), "Should have z-scores after initial window"
-    assert (
-        -4.0 < z_score.mean() < 4.0
-    ), "Z-score mean should be within reasonable bounds"
-    assert 0.5 < z_score.std() < 5.0, "Z-score volatility should be reasonable"
+        len(valid_z_scores) == test_config["z_score"]["valid_count"]
+    ), "Should have expected number of valid z-scores"
 
-    # Test for stationarity by checking if z-scores mean-revert
-    assert z_score.autocorr() < 0.95, "Z-scores should not have unit root"
+    # Test z-score statistical properties with exact values
+    assert z_score.mean() == pytest.approx(
+        test_config["z_score"]["mean"], abs=1e-4
+    ), "Z-score mean should match expected value"
+
+    assert z_score.std() == pytest.approx(
+        test_config["z_score"]["std"], abs=1e-4
+    ), "Z-score std should be close to 1"
+
+    # Test for stationarity with exact autocorrelation value
+    assert z_score.autocorr() == pytest.approx(
+        test_config["z_score"]["autocorr"], abs=1e-4
+    ), "Z-score autocorrelation should match expected value"
 
 
 def test_generate_signals(trader, market_data):
@@ -256,6 +372,109 @@ def test_error_handling(trader):
     )
     with pytest.raises(Exception):
         trader.calculate_spread(nan_df)
+
+
+def test_generate_signals_kalman(trader, market_data):
+    """Test Kalman filter signal generation using real market data"""
+    df, _, _, test_config = market_data
+
+    # Create a new trader instance with Kalman method
+    kalman_trader = PairsTrader(
+        stock1=trader.stock1,
+        stock2=trader.stock2,
+        start_date=trader.start_date,
+        end_date=trader.end_date,
+        threshold_params={
+            "delta": test_config["kalman"]["delta"],
+            "R": test_config["kalman"]["R"],
+        },
+        method="kalman",
+    )
+
+    # Calculate spread and generate signals
+    spread, hedge_ratio, is_reversed = kalman_trader.calculate_spread(df)
+    signals = kalman_trader.generate_signals_kalman(spread)
+
+    # Test filtered spread properties
+    filtered_spread = signals["filtered_spread"]
+    expected = test_config["kalman"]["filtered_spread"]
+
+    assert filtered_spread.mean() == pytest.approx(
+        expected["mean"], abs=1e-4
+    ), "Filtered spread mean should match expected value"
+
+    assert filtered_spread.std() == pytest.approx(
+        expected["std"], abs=1e-4
+    ), "Filtered spread std should match expected value"
+
+    assert filtered_spread.iloc[0] == pytest.approx(
+        expected["first_value"], abs=1e-4
+    ), "First filtered spread value should match expected"
+
+    assert filtered_spread.iloc[-1] == pytest.approx(
+        expected["last_value"], abs=1e-4
+    ), "Last filtered spread value should match expected"
+
+    # Test signal generation
+    assert "position" in signals.columns, "Signals should contain position column"
+    assert signals["position"].isin([-1, 0, 1]).all(), "Positions should be -1, 0, or 1"
+
+    # Test signal counts
+    signal_counts = {
+        "long": (signals["position"] == 1).sum(),
+        "short": (signals["position"] == -1).sum(),
+        "neutral": (signals["position"] == 0).sum(),
+    }
+
+    expected_counts = expected["signal_counts"]
+    assert (
+        signal_counts["long"] == expected_counts["long"]
+    ), f"Expected {expected_counts['long']} long signals, got {signal_counts['long']}"
+    assert (
+        signal_counts["short"] == expected_counts["short"]
+    ), f"Expected {expected_counts['short']} short signals, got {signal_counts['short']}"
+    assert (
+        signal_counts["neutral"] == expected_counts["neutral"]
+    ), f"Expected {expected_counts['neutral']} neutral signals, got {signal_counts['neutral']}"
+
+    # Test signal transitions
+    position_changes = signals["position"].diff()
+    assert (
+        abs(position_changes).max() <= 2
+    ), "Position changes should not exceed 2 (from -1 to 1 or vice versa)"
+
+
+def test_calculate_statistics_kalman(trader, market_data):
+    """Test statistics calculation for Kalman filter strategy"""
+    df, _, _, test_config = market_data
+
+    # Create a new trader instance with Kalman method
+    kalman_trader = PairsTrader(
+        stock1=trader.stock1,
+        stock2=trader.stock2,
+        start_date=trader.start_date,
+        end_date=trader.end_date,
+        threshold_params={
+            "delta": test_config["kalman"]["delta"],
+            "R": test_config["kalman"]["R"],
+        },
+        method="kalman",
+    )
+
+    # Run the strategy
+    spread, hedge_ratio, is_reversed = kalman_trader.calculate_spread(df)
+    signals = kalman_trader.generate_signals_kalman(spread)
+    signals = kalman_trader.calculate_returns(df, signals, hedge_ratio, is_reversed)
+
+    # Calculate statistics
+    stats = kalman_trader.calculate_statistics(signals)
+    expected_stats = test_config["kalman"]["statistics"]
+
+    # Test each statistic matches expected values
+    for key, expected_value in expected_stats.items():
+        assert stats[key] == pytest.approx(
+            expected_value, abs=1e-4
+        ), f"{key} should be {expected_value}, got {stats[key]}"
 
 
 if __name__ == "__main__":

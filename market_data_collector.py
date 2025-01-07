@@ -24,7 +24,7 @@ def fetch_and_save_test_data():
 
     # Fetch one year of data for each pair
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=365)
+    start_date = end_date - timedelta(days=365 * 10)
 
     for stock1, stock2 in pairs:
         print(f"Fetching data for {stock1}-{stock2}...")

@@ -122,13 +122,31 @@ class PairsTrader:
 
         # Calculate RSI
         delta = spread.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
 
-        rs = gain / loss
+        # Separate gains and losses
+        gains = delta.copy()
+        losses = delta.copy()
+        gains[gains < 0] = 0
+        losses[losses > 0] = 0
+        losses = abs(losses)  # Make losses positive
+
+        # Calculate average gains and losses
+        avg_gains = gains.rolling(window=period).mean()
+        avg_losses = losses.rolling(window=period).mean()
+
+        # Calculate RS and RSI
+        rs = avg_gains / avg_losses
         rsi = 100 - (100 / (1 + rs))
 
+        # Handle edge cases
+        rsi = rsi.replace([np.inf, -np.inf], np.nan)
+        rsi = rsi.fillna(50)  # Fill NaN with neutral value
+
+        # Store RSI for plotting
+        signals["rsi"] = rsi
         signals["position"] = 0
+
+        # Generate signals
         signals.loc[rsi < threshold, "position"] = 1  # Long when oversold
         signals.loc[rsi > (100 - threshold), "position"] = -1  # Short when overbought
 
@@ -140,6 +158,7 @@ class PairsTrader:
         R = self.threshold_params["R"]
 
         signals = pd.DataFrame(index=spread.index)
+        signals["position"] = 0  # Initialize position column first
         n = len(spread)
 
         # Initialize Kalman Filter parameters
@@ -167,9 +186,12 @@ class PairsTrader:
         signals["filtered_spread"] = filtered_spread
 
         # Generate signals based on filtered spread
-        signals["position"] = 0
         signals.loc[filtered_spread < -self.threshold_params["delta"], "position"] = 1
         signals.loc[filtered_spread > self.threshold_params["delta"], "position"] = -1
+
+        # Debug prints
+        print(f"First few positions: {signals['position'].head()}")
+        print(f"Position value counts: {signals['position'].value_counts()}")
 
         return signals
 
@@ -181,27 +203,28 @@ class PairsTrader:
 
             if self.method == "half-life":
                 signals = self.generate_signals_half_life(spread, self.threshold_params)
-                z_score = signals["normalized_spread"]
+                indicator = spread  # Use raw spread for visualization
+                signals["spread"] = spread  # Store spread for reference
             elif self.method == "bollinger":
                 signals = self.generate_signals_bollinger(spread)
-                z_score = (
+                indicator = (
                     spread
                     - spread.rolling(window=self.threshold_params["window"]).mean()
                 ) / spread.rolling(window=self.threshold_params["window"]).std()
             elif self.method == "rsi":
                 signals = self.generate_signals_rsi(spread)
-                z_score = spread  # Use spread for visualization
+                indicator = signals["rsi"]  # Use RSI values instead of spread
             elif self.method == "kalman":
                 signals = self.generate_signals_kalman(spread)
-                z_score = signals["filtered_spread"]
+                indicator = signals["filtered_spread"]
             else:  # Default z-score method
-                z_score = self.calculate_z_score(spread)
-                signals = self.generate_signals_zscore(z_score)
+                indicator = self.calculate_z_score(spread)
+                signals = self.generate_signals_zscore(indicator)
 
             signals = self.calculate_returns(df, signals, hedge_ratio, is_reversed)
             stats = self.calculate_statistics(signals)
 
-            return df, spread, z_score, signals, stats
+            return df, spread, indicator, signals, stats
         except Exception as e:
             print(f"Error in run_backtest: {str(e)}")
             raise
@@ -347,10 +370,9 @@ class PairsTrader:
 
         # Calculate strategy returns with explicit position handling
         signals["strategy_returns"] = 0.0
-        signals.loc[signals["position"] != 0, "strategy_returns"] = (
-            signals["position"].shift(1).loc[signals["position"] != 0]
-            * spread_returns
-            * self.leverage
+        # Use shifted positions for all returns
+        signals["strategy_returns"] = (
+            signals["position"].shift(1) * spread_returns * self.leverage
         )
 
         # Calculate cumulative returns
@@ -359,67 +381,65 @@ class PairsTrader:
         return signals
 
     def calculate_statistics(self, signals):
-        stats = {}
+        """Calculate trading statistics"""
         returns = signals["strategy_returns"].dropna()
 
-        # Add leverage information to stats
-        if self.leverage > 1:
-            stats["Leverage Used"] = f"{self.leverage}x"
-            stats["Note"] = "Returns shown include leverage effects"
+        # Calculate number of trades by looking at position changes
+        position_changes = signals["position"].diff()
 
-        # Handle empty or insufficient data
-        if len(returns) < 2:
-            return {
-                "Total Returns": "N/A",
-                "Annual Returns": "N/A",
-                "Annual Volatility": "N/A",
-                "Sharpe Ratio": "N/A",
-                "Max Drawdown": "N/A",
-            }
+        # A trade occurs when:
+        # 1. Position changes from 1 to -1 or vice versa (absolute change of 2)
+        # 2. Position changes from 0 to non-zero or vice versa (absolute change of 1)
+        num_trades = (abs(position_changes) >= 1).sum()
 
-        # Calculate trading days in the sample
-        trading_days = len(returns)
-        annualization_factor = 252 / trading_days
-
-        # Calculate total return
-        total_return = (signals["cumulative_returns"].iloc[-1] - 1) * 100
-        stats["Total Returns"] = f"{total_return:.2f}%"
-
-        # Calculate annualized return
-        period_return = returns.mean() * trading_days
-        annual_return = period_return * annualization_factor
-        stats["Annual Returns"] = f"{annual_return * 100:.2f}%"
-
-        # Calculate annualized volatility
-        annual_vol = returns.std() * np.sqrt(252)
-        stats["Annual Volatility"] = f"{annual_vol * 100:.2f}%"
-
-        # Calculate Sharpe Ratio
-        # Using 0 as risk-free rate for simplicity
-        if annual_vol != 0:  # Prevent division by zero
-            sharpe = annual_return / annual_vol
-            stats["Sharpe Ratio"] = f"{sharpe:.2f}"
-        else:
-            stats["Sharpe Ratio"] = "N/A"
-
-        # Calculate Maximum Drawdown
-        cum_returns = (1 + returns).cumprod()
-        rolling_max = cum_returns.cummax()
-        drawdowns = cum_returns / rolling_max - 1
-        max_drawdown = drawdowns.min() * 100
-        stats["Max Drawdown"] = f"{max_drawdown:.2f}%"
-
-        # Add number of trades
-        position_changes = signals["position"].diff().fillna(0)
-        num_trades = (position_changes != 0).sum()
-        stats["Number of Trades"] = f"{num_trades}"
-
-        # Add win rate if there are trades
+        # Calculate win rate only if there are trades
         if num_trades > 0:
-            profitable_trades = (returns > 0).sum()
-            win_rate = (profitable_trades / num_trades) * 100
-            stats["Win Rate"] = f"{win_rate:.2f}%"
-        else:
-            stats["Win Rate"] = "N/A"
+            # Calculate trade returns by summing returns between position changes
+            trade_returns = []
+            current_position = signals["position"].iloc[0]
+            trade_start = signals.index[0]
 
-        return stats
+            for idx in signals.index[1:]:
+                if signals.loc[idx, "position"] != current_position:
+                    # Position changed, calculate return for completed trade
+                    if trade_start is not None:
+                        trade_return = (
+                            1 + signals.loc[trade_start:idx, "strategy_returns"]
+                        ).prod() - 1
+                        trade_returns.append(trade_return)
+
+                    # Start new trade
+                    trade_start = idx
+                    current_position = signals.loc[idx, "position"]
+
+            # Handle last trade if still open
+            if trade_start is not None and trade_start != signals.index[-1]:
+                trade_return = (
+                    1 + signals.loc[trade_start:, "strategy_returns"]
+                ).prod() - 1
+                trade_returns.append(trade_return)
+
+            # Calculate win rate from trade returns
+            profitable_trades = sum(1 for ret in trade_returns if ret > 0)
+            win_rate = profitable_trades / len(trade_returns) if trade_returns else 0.0
+        else:
+            win_rate = 0.0
+
+        statistics = {
+            "Total Returns": (signals["cumulative_returns"].iloc[-1] - 1),
+            "Annual Returns": (1 + returns.mean()) ** 252 - 1,
+            "Annual Volatility": returns.std() * np.sqrt(252),
+            "Sharpe Ratio": (
+                (returns.mean() / returns.std()) * np.sqrt(252)
+                if returns.std() != 0
+                else 0
+            ),
+            "Max Drawdown": (
+                signals["cumulative_returns"] / signals["cumulative_returns"].cummax()
+                - 1
+            ).min(),
+            "Number of Trades": num_trades,
+            "Win Rate": win_rate,
+        }
+
+        return statistics
